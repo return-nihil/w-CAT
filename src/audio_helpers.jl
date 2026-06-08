@@ -107,6 +107,7 @@ function magnitude_spectrum(frame, sr; n_fft=nothing, window=:hann)
     w = analysis_window(length(x); window=window)
     xw = x .* w
 
+    fft_size = isnothing(n_fft) ? length(x) : Int(n_fft)
     if fft_size < length(xw)
         buffer = xw[1:fft_size]
     elseif fft_size > length(xw)
@@ -172,7 +173,7 @@ function mel_filterbank(n_fft, sr; nbands=24, fmin=0.0, fmax=nothing)
     mel_points = collect(range(hz_to_mel(fmin), hz_to_mel(high_hz), length=nbands + 2))
     hz_points = mel_to_hz.(mel_points)
 
-    bin_points = floor.(Int, (n_fft + 1) .* hz_points ./ Float64(sr)) .+ 1
+    bin_points = floor.(Int, (n_fft + 1) .* hz_points ./ Float64(sr)) .+ 1 # 1-based Julia indices!!
     bin_points = clamp.(bin_points, 1, n_bins)
 
     filters = zeros(Float64, nbands, n_bins)
@@ -199,15 +200,19 @@ function mel_filterbank(n_fft, sr; nbands=24, fmin=0.0, fmax=nothing)
 end
 
 
-function dct_ii(x, ncoeffs)
-    n = length(x)
-    out = zeros(Float64, ncoeffs)
+function dct_ii(x, n_coeffs)
+    # Implementazione DCT-II semplificata
 
-    for k in 1:ncoeffs
+    y = as_float_vector(x)
+    n = length(y)
+
+    out = zeros(Float64, n_coeffs)
+
+    for k in 1:n_coeffs
         s = 0.0
 
         @inbounds for i in 1:n
-            s += x[i] * cos(pi * (k - 1) * (2 * (i - 1) + 1) / (2 * n))
+            s += y[i] * cos(pi * (k - 1) * (2 * (i - 1) + 1) / (2 * n))
         end
 
         out[k] = s
@@ -219,7 +224,7 @@ end
 
 # SPECTRAL PEAKS
 
-function spectral_peaks(frame, sr; min_freq=20.0, max_peaks=30, min_prominence=0.01, n_fft=nothing, window=:hann, eps=1e-12)
+function spectral_peaks(frame, sr; min_freq=20.0, max_peaks=30, min_prom=0.01, n_fft=nothing, window=:hann, eps=1e-12)
     freqs, mag = magnitude_spectrum(frame, sr; n_fft=n_fft, window=window)
 
     peaks = Vector{Tuple{Float64,Float64}}()
@@ -232,7 +237,7 @@ function spectral_peaks(frame, sr; min_freq=20.0, max_peaks=30, min_prominence=0
         if freqs[i] >= min_freq &&
            mag[i] > mag[i - 1] &&
            mag[i] >= mag[i + 1] &&
-           mag[i] >= min_prominence * max_mag
+           mag[i] >= min_prom * max_mag
 
             push!(peaks, (Float64(freqs[i]), Float64(mag[i])))
         end
@@ -271,4 +276,74 @@ function harmonic_amplitudes(frame, sr, f0; n_harmonics=10, tolerance=0.04, n_ff
     end
 
     return values
+end
+
+
+# BARK 
+# cose varie per algoritmo roughness su stile Dissonance di Essentia:
+# https://essentia.upf.edu/reference/std_Dissonance.html
+function a_weighting(f)
+        f2 = f * f
+        return 1.25893 * 12200.0^2 * f2^2 /
+               ((f2 + 20.6^2) *
+                (f2 + 12200.0^2) *
+                sqrt(f2 + 107.7^2) *
+                sqrt(f2 + 737.9^2))
+    end
+
+
+function hz_to_bark(f)
+    b = (26.81 * f) / (1960.0 + f) - 0.53
+
+    if b < 2.0
+        b += 0.15 * (2.0 - b)
+    elseif b > 20.1
+        b += 0.22 * (b - 20.1)
+    end
+
+    return b
+end
+
+
+function bark_to_hz(z)
+    if z < 2.0
+        z = (z - 0.3) / 0.85
+    elseif z > 20.1
+        z = (z - 4.422) / 1.22
+    end
+
+    return 1960.0 * (z + 0.53) / (26.28 - z)
+end
+
+
+function bark_critical_bandwidth(z)
+    return 52548.0 / (z^2 - 52.56 * z + 690.39)
+end
+
+
+function plomp_levelt_consonance(df_cbw)
+    if df_cbw < 0.0
+        return 1.0
+    elseif df_cbw > 1.18
+        return 1.0
+    end
+
+    y =
+        -6.58977878 * df_cbw^5 +
+        28.58224226 * df_cbw^4 -
+        47.36739986 * df_cbw^3 +
+        35.70679761 * df_cbw^2 -
+        10.36526344 * df_cbw +
+        1.00026609
+
+    return clamp(y, 0.0, 1.0)
+end
+
+
+function pair_consonance(f1, f2)
+    cbw1 = bark_critical_bandwidth(hz_to_bark(f1))
+    cbw2 = bark_critical_bandwidth(hz_to_bark(f2))
+    cbw = min(cbw1, cbw2)
+
+    return plomp_levelt_consonance(abs(f2 - f1) / cbw)
 end
