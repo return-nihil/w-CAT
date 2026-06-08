@@ -6,7 +6,7 @@ using DSP
 
 # AUDIO 
 
-function to_mono(x::AbstractArray)
+function to_mono(x)
     if ndims(x) == 1
         return Float64.(x)
     elseif ndims(x) == 2
@@ -15,13 +15,13 @@ function to_mono(x::AbstractArray)
 end
 
 
-function normalize_audio(x::AbstractVector)
+function normalize_audio(x)
     m = maximum(abs, x)
     return m > 0 ? Float64.(x) ./ m : Float64.(x)
 end
 
 
-function frame_signal(x::AbstractVector, frame_size::Int, hop_size::Int)
+function frame_signal(x, frame_size, hop_size)
     frames = Vector{Vector{Float64}}()
     i = 1
 
@@ -34,43 +34,34 @@ function frame_signal(x::AbstractVector, frame_size::Int, hop_size::Int)
 end
 
 
-function as_float_vector(x::AbstractVector)
+function as_float_vector(x)
     return Float64.(x)
 end
 
 
 # WINDOWING
 
-function gaussian_window(n::Int; sigma=0.4)
+function gaussian_window(n; σ=0.4)
     if n == 1 # <--- check, forse inutile
         return ones(Float64, 1)
     end
 
     center = (n - 1) / 2
-    scale = sigma * center
+    scale = σ * center
 
-    scale <= 0 && error("sigma must be positive")
-
-    return [
-        exp(-0.5 * ((i - 1 - center) / scale)^2)
-        for i in 1:n
-    ]
+    return [exp(-0.5 * ((i - 1 - center) / scale)^2) for i in 1:n]
 end
 
 
-function trapezoid_window(n::Int; base=0.5)
+function trapezoid_window(n; base=0.5)
     if n == 1 # <--- check, forse inutile
         return ones(Float64, 1)
     end
 
-    if !(0.0 <= base <= 1.0)
-        error("base must be between 0.0 and 1.0")
-    end
-
     w = zeros(Float64, n)
 
-    plateau_samples = round(Int, base * n)
-    ramp_total = n - plateau_samples
+    base_samples = round(Int, base * n)
+    ramp_total = n - base_samples
     ramp_len = ramp_total ÷ 2
 
     if ramp_len <= 0 # questo é un rettangolare
@@ -94,7 +85,7 @@ function trapezoid_window(n::Int; base=0.5)
 end
 
 
-function analysis_window(n::Int; window=:hann, gauss_sigma=0.4, trapez_base=0.5)
+function analysis_window(n; window=:hann, gauss_σ=0.4, trapez_base=0.5)
     if window == :hann
         return DSP.Windows.hann(n)
     elseif window == :hamming
@@ -102,7 +93,7 @@ function analysis_window(n::Int; window=:hann, gauss_sigma=0.4, trapez_base=0.5)
     elseif window == :rect
         return ones(Float64, n)
     elseif window == :gaussian
-        return gaussian_window(n; sigma=gauss_sigma)
+        return gaussian_window(n; σ=gauss_σ)
     elseif window == :trapezoid
         return trapezoid_window(n; base=trapez_base)
     end
@@ -111,13 +102,10 @@ end
 
 # SPECTRAL ANALYSIS
 
-function magnitude_spectrum(frame::AbstractVector, sr::Real; n_fft=nothing, window=:hann)
+function magnitude_spectrum(frame, sr; n_fft=nothing, window=:hann)
     x = as_float_vector(frame)
     w = analysis_window(length(x); window=window)
     xw = x .* w
-
-    fft_size = isnothing(n_fft) ? length(xw) : Int(n_fft)
-    fft_size <= 0 && error("n_fft must be positive")
 
     if fft_size < length(xw)
         buffer = xw[1:fft_size]
@@ -135,7 +123,7 @@ function magnitude_spectrum(frame::AbstractVector, sr::Real; n_fft=nothing, wind
 end
 
 
-function power_spectrum(frame::AbstractVector, sr::Real; n_fft=nothing, window=:hann)
+function power_spectrum(frame, sr; n_fft=nothing, window=:hann)
     freqs, mag = magnitude_spectrum(frame, sr; n_fft=n_fft, window=window)
     return freqs, mag .^ 2
 end
@@ -143,7 +131,7 @@ end
 
 # AUTOCORRELATION
 
-function autocorrelation(frame::AbstractVector; eps=1e-12)
+function autocorrelation(frame; eps=1e-12)
     x = as_float_vector(frame)
     x = x .- mean(x)
 
@@ -177,7 +165,7 @@ function mel_to_hz(m::Real)
 end
 
 
-function mel_filterbank(n_fft::Int, sr::Real; nbands=24, fmin=0.0, fmax=nothing)
+function mel_filterbank(n_fft, sr; nbands=24, fmin=0.0, fmax=nothing)
     n_bins = n_fft ÷ 2 + 1
     high_hz = isnothing(fmax) ? Float64(sr) / 2.0 : Float64(fmax)
 
@@ -211,7 +199,7 @@ function mel_filterbank(n_fft::Int, sr::Real; nbands=24, fmin=0.0, fmax=nothing)
 end
 
 
-function dct_ii(x::AbstractVector, ncoeffs::Int)
+function dct_ii(x, ncoeffs)
     n = length(x)
     out = zeros(Float64, ncoeffs)
 
@@ -231,7 +219,7 @@ end
 
 # SPECTRAL PEAKS
 
-function spectral_peaks(frame::AbstractVector, sr::Real; min_freq=20.0, max_peaks=30, min_prominence=0.01, n_fft=nothing, window=:hann, eps=1e-12)
+function spectral_peaks(frame, sr; min_freq=20.0, max_peaks=30, min_prominence=0.01, n_fft=nothing, window=:hann, eps=1e-12)
     freqs, mag = magnitude_spectrum(frame, sr; n_fft=n_fft, window=window)
 
     peaks = Vector{Tuple{Float64,Float64}}()
@@ -258,7 +246,7 @@ end
 
 # HARMONIC ANALYSIS
 
-function harmonic_amplitudes(frame::AbstractVector, sr::Real, f0::Real; n_harmonics=10, tolerance=0.04, n_fft=nothing, window=:hann)
+function harmonic_amplitudes(frame, sr, f0; n_harmonics=10, tolerance=0.04, n_fft=nothing, window=:hann)
     freqs, mag = magnitude_spectrum(frame, sr; n_fft=n_fft, window=window)
 
     values = zeros(Float64, n_harmonics)
