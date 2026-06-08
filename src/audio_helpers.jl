@@ -156,12 +156,12 @@ end
 
 # MEL SCALE
 
-function hz_to_mel(f::Real)
+function hz_to_mel(f)
     return 2595.0 * log10(1.0 + f / 700.0)
 end
 
 
-function mel_to_hz(m::Real)
+function mel_to_hz(m)
     return 700.0 * (10.0 ^ (m / 2595.0) - 1.0)
 end
 

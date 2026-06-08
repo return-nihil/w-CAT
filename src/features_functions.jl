@@ -397,7 +397,7 @@ end
 
 # PERCEPTUAL
 
-function roughness(frame, sr, max_peaks=30, min_prom=0.01, n_fft=nothing, window=:hann, eps=1e-12)
+function roughness(frame, sr; max_peaks=30, min_prom=0.01, n_fft=nothing, window=:hann, eps=1e-12)
     # Basato su Dissonance in Essentia 
     # https://essentia.upf.edu/reference/std_Dissonance.html
     peaks = spectral_peaks(
