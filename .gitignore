@@ -2,6 +2,8 @@
 audio/*
 !audio/.gitkeep
 
+/src/feature_functions_OLD.jl
+
 # Generated chunks
 chunked_audio/
 

@@ -15,13 +15,12 @@ function loudness_db(frame; eps=1e-12)
 end
 
 
-function peak_amplitude(frame)
+#=function peak_amplitude(frame)
     x = as_float_vector(frame)
     isempty(x) && return 0.0
 
     return maximum(abs, x)
-end
-
+end=#
 
 function zero_crossing_rate(frame)
     x = as_float_vector(frame)
@@ -39,7 +38,7 @@ function zero_crossing_rate(frame)
 end
 
 
-function temporal_centroid_s(frame, sr; eps=1e-12)
+#=function temporal_centroid_s(frame, sr; eps=1e-12)
     x = as_float_vector(frame)
     isempty(x) && return 0.0
 
@@ -50,7 +49,7 @@ function temporal_centroid_s(frame, sr; eps=1e-12)
 
     t = collect(0:(length(x) - 1)) ./ Float64(sr)
     return sum(t .* energy) / total
-end
+end=#
 
 
 
@@ -77,7 +76,7 @@ function spectral_spread_hz(frame, sr; n_fft=nothing, window=:hann, eps=1e-12)
 end
 
 
-function spectral_rolloff_hz(frame, sr; rolloff=0.85, n_fft=nothing, window=:hann, eps=1e-12)
+#=function spectral_rolloff_hz(frame, sr; rolloff=0.85, n_fft=nothing, window=:hann, eps=1e-12)
     freqs, mag = magnitude_spectrum(frame, sr; n_fft=n_fft, window=window)
 
     total = sum(mag)
@@ -88,7 +87,7 @@ function spectral_rolloff_hz(frame, sr; rolloff=0.85, n_fft=nothing, window=:han
     idx = findfirst(v -> v >= threshold, cumulative)
 
     return isnothing(idx) ? freqs[end] : freqs[idx]
-end
+end=#
 
 
 function spectral_flatness(frame, sr; n_fft=nothing, window=:hann, eps=1e-12)
@@ -103,7 +102,7 @@ function spectral_flatness(frame, sr; n_fft=nothing, window=:hann, eps=1e-12)
 end
 
 
-function spectral_flux(frame, previous_frame, sr; n_fft=nothing, window=:hann, eps=1e-12)
+#=function spectral_flux(frame, previous_frame, sr; n_fft=nothing, window=:hann, eps=1e-12)
     isnothing(previous_frame) && return 0.0
 
     _, mag = magnitude_spectrum(frame, sr; n_fft=n_fft, window=window)
@@ -116,7 +115,7 @@ function spectral_flux(frame, previous_frame, sr; n_fft=nothing, window=:hann, e
     b = previous_mag[1:n] ./ (norm(previous_mag[1:n]) + eps)
 
     return sqrt(sum((a .- b) .^ 2))
-end
+end=#
 
 
 function brightness(frame, sr; cutoff_hz=1500.0, n_fft=nothing, window=:hann, eps=1e-12)
@@ -242,7 +241,7 @@ end
 
 # PER-BAND
 
-function band_energy_ratio(frame, sr, low_hz, high_hz; n_fft=nothing, window=:hann, eps=1e-12)
+#=function band_energy_ratio(frame, sr, low_hz, high_hz; n_fft=nothing, window=:hann, eps=1e-12)
     freqs, power = power_spectrum(frame, sr; n_fft=n_fft, window=window)
 
     total = sum(power)
@@ -258,10 +257,10 @@ function band_energy_ratio(frame, sr, low_hz, high_hz; n_fft=nothing, window=:ha
     end
 
     return band_total / total
-end
+end=#
 
 
-function band_energy_ratios(frame, sr, bands; n_fft=nothing, window=:hann)
+#=function band_energy_ratios(frame, sr, bands; n_fft=nothing, window=:hann)
     values = Float64[]
 
     for band in bands
@@ -270,7 +269,7 @@ function band_energy_ratios(frame, sr, bands; n_fft=nothing, window=:hann)
     end
 
     return values
-end
+end=#
 
 
 
@@ -352,7 +351,7 @@ function inharmonicity(frame, sr, f0; n_harmonics=10, tolerance=0.04, n_fft=noth
 end
 
 
-function tristimulus(frame, sr, f0; n_harmonics=10, tolerance=0.04, n_fft=nothing, window=:hann, eps=1e-12)
+#=function tristimulus(frame, sr, f0; n_harmonics=10, tolerance=0.04, n_fft=nothing, window=:hann, eps=1e-12)
     # Tristimulus stile Essentia 
     # (https://github.com/MTG/essentia/blob/v2.1_beta5-1445-gb9fa6cb6/src/algorithms/tonal/tristimulus.cpp)
     # forse inutile, check
@@ -373,7 +372,7 @@ function tristimulus(frame, sr, f0; n_harmonics=10, tolerance=0.04, n_fft=nothin
     upper_harmonics = length(amps) >= 5 ? sum(@view amps[5:end]) / total : 0.0
 
     return first_harmonic, middle_harmonics, upper_harmonics
-end
+end=#
 
 
 
