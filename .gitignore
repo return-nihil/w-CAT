@@ -13,5 +13,5 @@ corpus_index.csv
 
 Manifest.toml
 
-src/*
-scr_layer/*
+src_first/*
+scr_layer_last/*
