@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>w-CAT - Automation Editor</title>
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+<style>
+    body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #111;
+        color: #eee;
+    }
+
+    header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: #181818;
+        border-bottom: 1px solid #3c3c3c;
+        padding: 12px;
+    }
+
+    h1 {
+        margin: 0 0 8px 0;
+        font-size: 18px;
+        font-weight: 600;
+    }
+
+    textarea {
+        width: 100%;
+        height: 44px;
+        box-sizing: border-box;
+        background: #232222;
+        color: #f5b3b3;
+        border: 1px solid #403f3f;
+        border-radius: 4px;
+        padding: 8px;
+        font-family: monospace;
+    }
+
+    button, input[type="file"] {
+        margin: 8px 8px 0 0;
+    }
+
+    button {
+        background: #333;
+        color: #f5b3b3;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding: 6px 9px;
+        cursor: pointer;
+    }
+
+    button:hover { background: #444; }
+
+    button.small {
+        margin: 0 0 0 8px;
+        padding: 3px 7px;
+        font-size: 12px;
+    }
+
+    label.toggle {
+        display: inline-flex;
+        gap: 5px;
+        align-items: center;
+        margin-left: 10px;
+        color: #ccc;
+        font-size: 12px;
+    }
+
+    #lanes { padding: 12px; }
+
+    .section-title {
+        margin: 24px 0 10px 0;
+        font-size: 19px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .section-title.selection { color: #ff5cf4; }
+    .section-title.feature_weights { color: #8ecaff; }
+
+    .lane {
+        margin-bottom: 14px;
+        border: 1px solid #333;
+        background: #181818;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    .lane.inactive { opacity: 0.55; }
+
+    .lane-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 10px;
+        border-bottom: 1px solid #333;
+        font-size: 13px;
+    }
+
+    .lane-title.selection { background: rgba(255, 92, 244, 0.16); }
+    .lane-title.feature_weights { background: rgba(142, 202, 255, 0.16); }
+
+    .lane-title-left {
+        display: flex;
+        align-items: center;
+    }
+
+    .lane-title strong {
+        font-size: 16px;
+        font-weight: 750;
+    }
+
+    .lane-title.selection strong { color: #ff9af8; }
+    .lane-title.feature_weights strong { color: #b8dcff; }
+
+    .lane-title span {
+        color: #aaa;
+        font-family: monospace;
+    }
+
+    canvas {
+        display: block;
+        width: 100%;
+        height: 120px;
+        background: #111;
+        cursor: crosshair;
+    }
+
+    .hint {
+        color: #aaa;
+        font-size: 12px;
+        line-height: 1.4;
+        margin-top: 6px;
+    }
+
+    .file-label {
+        color: #ccc;
+        font-size: 12px;
+        margin-right: 6px;
+    }
+</style>
+</head>
+
+<body>
+<header>
+    <h1>w-CAT - Automation Editor</h1>
+
+    <label>Features loaded from config or edited manually:</label>
+    <textarea id="featureText">loudness_db,spectral_centroid_hz,spectral_spread_hz,spectral_flatness,brightness,yin_pitch,roughness,mfcc,chroma</textarea>
+
+    <div>
+        <span class="file-label">Load target audio:</span>
+        <input type="file" accept="audio/*,.wav" onchange="loadTargetAudio(event)">
+
+        <span class="file-label">Load config YAML:</span>
+        <input type="file" accept=".yaml,.yml" onchange="loadConfigYAML(event)">
+
+        <span class="file-label">Load automation JSON:</span>
+        <input type="file" accept=".json" onchange="loadAutomationJSON(event)">
+    </div>
+
+    <div>
+        <button onclick="buildDefaultAutomationFromFeatureText()">Rebuild lanes from features</button>
+        <button onclick="downloadJSON()">Export automation.json</button>
+    </div>
+
+    <div class="hint">
+        Selection lanes control k, density, spray_samples, and grain_length_ratio. Feature lanes are weights, not feature values: 0 ignores the feature, 1 is neutral, 3 strongly emphasizes it.
+        Click to add points, drag to edit, double-click interior points to delete. In range mode, clicks go to the closest curve.
+    </div>
+</header>
+
+<div id="lanes"></div>
+
+<script>
+let automation = null;
+let laneDefs = [];
+let selectedPoint = null;
+let nextPointId = 1;
+
+let targetAudio = null;
+let targetDuration = 0;
+let targetSampleRate = 0;
+let targetPeaks = null;
+let targetFileName = "";
+
+const CANVAS_W = 1000;
+const CANVAS_H = 120;
+
+const PAD_X = 28;
+const PAD_Y = 14;
+
+const PLOT_X0 = PAD_X;
+const PLOT_X1 = CANVAS_W - PAD_X;
+const PLOT_Y0 = PAD_Y;
+const PLOT_Y1 = CANVAS_H - PAD_Y;
+
+const POINT_RADIUS = 7;
+const HIT_RADIUS = 10;
+
+const COLORS = {
+    selection: "#ff5cf4",
+    feature_weights: "#8ecaff",
+    feature_lower: "#5bbcff",
+    feature_upper: "#d1ecff",
+    feature_fill: "rgba(142, 202, 255, 0.18)",
+    point: "#ffcc66",
+    point_upper: "#fff0a3",
+    grid: "#292929",
+    plot_bg: "#151515",
+    plot_border: "#555",
+    waveform: "#ffffff",
+    reference: "rgba(255, 255, 255, 0.35)"
+};
+
+function parseFeatures() {
+    return document.getElementById("featureText").value
+        .split(",")
+        .map(x => x.trim())
+        .filter(x => x.length > 0);
+}
+
+function point(t, v) {
+    return {id: nextPointId++, t: t, v: v};
+}
+
+function defaultCurve(value) {
+    return {
+        active: true,
+        points: [point(0.0, value), point(1.0, value)]
+    };
+}
+
+function defaultFeatureCurve(value) {
+    return {
+        active: true,
+        mode: "single",
+        points: [point(0.0, value), point(1.0, value)]
+    };
+}
+
+function pointsFromJSON(points, defaultValue) {
+    if (!points || !Array.isArray(points)) {
+        return [point(0.0, defaultValue), point(1.0, defaultValue)];
+    }
+
+    return points.map(p => {
+        if (Array.isArray(p)) return point(Number(p[0]), Number(p[1]));
+        return point(Number(p.t), Number(p.v));
+    });
+}
+
+function ensureCurve(x, defaultValue) {
+    if (!x) return defaultCurve(defaultValue);
+
+    if (Array.isArray(x)) {
+        return {
+            active: true,
+            points: pointsFromJSON(x, defaultValue)
+        };
+    }
+
+    if (x.points && Array.isArray(x.points)) {
+        return {
+            active: x.active !== false,
+            points: pointsFromJSON(x.points, defaultValue)
+        };
+    }
+
+    return defaultCurve(defaultValue);
+}
+
+function ensureFeatureCurve(x, defaultValue) {
+    if (!x) return defaultFeatureCurve(defaultValue);
+
+    if (Array.isArray(x)) {
+        return {
+            active: true,
+            mode: "single",
+            points: pointsFromJSON(x, defaultValue)
+        };
+    }
+
+    const active = x.active !== false;
+    const mode = x.mode || ((x.lower && x.upper) ? "range" : "single");
+
+    if (mode === "range") {
+        return {
+            active: active,
+            mode: "range",
+            lower: pointsFromJSON(x.lower, Math.max(0.0, defaultValue - 0.25)),
+            upper: pointsFromJSON(x.upper, defaultValue + 0.25)
+        };
+    }
+
+    return {
+        active: active,
+        mode: "single",
+        points: pointsFromJSON(x.points, defaultValue)
+    };
+}
+
+function exportCurve(curve) {
+    return {
+        active: curve.active !== false,
+        points: curve.points.map(p => [round3(p.t), p.v])
+    };
+}
+
+function exportFeatureCurve(curve) {
+    if (curve.mode === "range") {
+        return {
+            active: curve.active !== false,
+            mode: "range",
+            lower: curve.lower.map(p => [round3(p.t), p.v]),
+            upper: curve.upper.map(p => [round3(p.t), p.v])
+        };
+    }
+
+    return {
+        active: curve.active !== false,
+        mode: "single",
+        points: curve.points.map(p => [round3(p.t), p.v])
+    };
+}
+
+function exportAutomation() {
+    const out = {
+        version: 5,
+        selection: {},
+        feature_weights: {}
+    };
+
+    for (const key of Object.keys(automation.selection)) {
+        out.selection[key] = exportCurve(automation.selection[key]);
+    }
+
+    for (const key of Object.keys(automation.feature_weights)) {
+        out.feature_weights[key] = exportFeatureCurve(automation.feature_weights[key]);
+    }
+
+    return out;
+}
+
+function buildDefaultAutomation(features) {
+    automation = {
+        version: 5,
+        selection: {
+            k: defaultCurve(1),
+            density: defaultCurve(1),
+            spray_samples: defaultCurve(0),
+            grain_length_ratio: defaultCurve(1)
+        },
+        feature_weights: {}
+    };
+
+    for (const f of features) {
+        automation.feature_weights[f] = defaultFeatureCurve(1);
+    }
+
+    rebuildLaneDefs();
+    render();
+}
+
+function buildDefaultAutomationFromFeatureText() {
+    buildDefaultAutomation(parseFeatures());
+}
+
+function featureNamesFromConfig(config) {
+    if (config.analysis_layers && config.analysis_layers.enabled === true && config.analysis_layers.features) {
+        const out = [];
+        const featuresByLayer = config.analysis_layers.features;
+        const layerOrder = config.analysis_layers.layers || Object.keys(featuresByLayer);
+
+        for (const layer of layerOrder) {
+            const features = featuresByLayer[layer] || [];
+            for (const f of features) {
+                out.push(`${layer}_${String(f)}`);
+            }
+        }
+
+        return [...new Set(out)].filter(x => x.length > 0);
+    }
+
+    if (config.use_features && Array.isArray(config.use_features)) {
+        return config.use_features.map(String).filter(x => x.length > 0);
+    }
+
+    if (config.features && Array.isArray(config.features)) {
+        return config.features
+            .map(f => typeof f === "string" ? {name: f, enabled: true} : {name: f.name, enabled: f.enabled !== false})
+            .filter(f => f.enabled && f.name)
+            .map(f => f.name);
+    }
+
+    alert("Config YAML must contain use_features or analysis_layers.features.");
+    return [];
+}
+
+function loadConfigYAML(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = e => {
+        const config = jsyaml.load(e.target.result);
+        const features = featureNamesFromConfig(config);
+
+        if (features.length === 0) {
+            alert("No features found in config.");
+            return;
+        }
+
+        document.getElementById("featureText").value = features.join(",");
+        buildDefaultAutomation(features);
+    };
+
+    reader.readAsText(file);
+}
+
+function loadAutomationJSON(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = e => {
+        const raw = JSON.parse(e.target.result);
+
+        automation = {
+            version: 5,
+            selection: {
+                k: ensureCurve(raw.selection && raw.selection.k, 1),
+                density: ensureCurve(raw.selection && raw.selection.density, 1),
+                spray_samples: ensureCurve(raw.selection && raw.selection.spray_samples, 0),
+                grain_length_ratio: ensureCurve(raw.selection && raw.selection.grain_length_ratio, 1)
+            },
+            feature_weights: {}
+        };
+
+        const rawFeatures = raw.feature_weights || {};
+
+        for (const f of Object.keys(rawFeatures)) {
+            automation.feature_weights[f] = ensureFeatureCurve(rawFeatures[f], 1);
+        }
+
+        document.getElementById("featureText").value = Object.keys(automation.feature_weights).join(",");
+        rebuildLaneDefs();
+        render();
+    };
+
+    reader.readAsText(file);
+}
+
+async function loadTargetAudio(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    targetFileName = file.name;
+
+    const arrayBuffer = await file.arrayBuffer();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioContext = new AudioContextClass();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+    targetDuration = audioBuffer.duration;
+    targetSampleRate = audioBuffer.sampleRate;
+
+    const n = audioBuffer.length;
+    const channels = audioBuffer.numberOfChannels;
+    const mono = new Float32Array(n);
+
+    for (let ch = 0; ch < channels; ch++) {
+        const data = audioBuffer.getChannelData(ch);
+        for (let i = 0; i < n; i++) mono[i] += data[i] / channels;
+    }
+
+    targetAudio = mono;
+    targetPeaks = buildWaveformPeaks(targetAudio, Math.floor(PLOT_X1 - PLOT_X0));
+
+    await audioContext.close();
+    render();
+}
+
+function buildWaveformPeaks(audio, width) {
+    const peaks = [];
+    const samplesPerPixel = Math.ceil(audio.length / width);
+
+    for (let x = 0; x < width; x++) {
+        const start = x * samplesPerPixel;
+        const end = Math.min(start + samplesPerPixel, audio.length);
+        let minValue = 1.0;
+        let maxValue = -1.0;
+
+        for (let i = start; i < end; i++) {
+            const v = audio[i];
+            if (v < minValue) minValue = v;
+            if (v > maxValue) maxValue = v;
+        }
+
+        peaks.push([minValue, maxValue]);
+    }
+
+    return peaks;
+}
+
+function rebuildLaneDefs() {
+    laneDefs = [];
+
+    laneDefs.push({section: "selection", key: "k", label: "k", min: 1, max: 32, step: 1, defaultValue: 1});
+    laneDefs.push({section: "selection", key: "density", label: "density", min: 0.1, max: 4, step: 0.01, defaultValue: 1});
+    laneDefs.push({section: "selection", key: "spray_samples", label: "spray_samples", min: 0, max: 100, step: 1, defaultValue: 0});
+    laneDefs.push({section: "selection", key: "grain_length_ratio", label: "grain_length_ratio", min: 0.1, max: 2.0, step: 0.01, defaultValue: 1});
+
+    for (const f of Object.keys(automation.feature_weights)) {
+        laneDefs.push({section: "feature_weights", key: f, label: f, min: 0, max: 3, step: 0.01, defaultValue: 1});
+    }
+}
+
+function getCurve(def) { return automation[def.section][def.key]; }
+
+function setCurve(def, curve) {
+    if (def.section === "feature_weights" && curve.mode === "range") {
+        curve.lower.sort((a, b) => a.t - b.t);
+        curve.upper.sort((a, b) => a.t - b.t);
+    } else {
+        curve.points.sort((a, b) => a.t - b.t);
+    }
+
+    automation[def.section][def.key] = curve;
+}
+
+function resetCurve(def) {
+    if (def.section === "feature_weights") {
+        automation[def.section][def.key] = defaultFeatureCurve(def.defaultValue);
+    } else {
+        automation[def.section][def.key] = defaultCurve(def.defaultValue);
+    }
+
+    render();
+}
+
+function setCurveActive(def, active) {
+    const curve = getCurve(def);
+    curve.active = active;
+    setCurve(def, curve);
+    render();
+}
+
+function setFeatureRangeMode(def, useRange) {
+    const curve = getCurve(def);
+
+    if (useRange && curve.mode !== "range") {
+        const lower = curve.points.map(p => point(p.t, clamp(p.v - 0.25, def.min, def.max)));
+        const upper = curve.points.map(p => point(p.t, clamp(p.v + 0.25, def.min, def.max)));
+        automation[def.section][def.key] = {active: curve.active !== false, mode: "range", lower: lower, upper: upper};
+    }
+
+    if (!useRange && curve.mode === "range") {
+        const times = uniqueSortedTimes(curve.lower, curve.upper);
+        const points = times.map(t => {
+            const lo = interpolatePoints(curve.lower, t, def.defaultValue);
+            const hi = interpolatePoints(curve.upper, t, def.defaultValue);
+            return point(t, clamp((lo + hi) * 0.5, def.min, def.max));
+        });
+        automation[def.section][def.key] = {active: curve.active !== false, mode: "single", points: points};
+    }
+
+    render();
+}
+
+function uniqueSortedTimes(a, b) {
+    const values = [];
+    for (const p of a) values.push(p.t);
+    for (const p of b) values.push(p.t);
+    return [...new Set(values.map(x => round3(x)))].sort((x, y) => x - y);
+}
+
+function interpolatePoints(points, t, defaultValue) {
+    if (!points || points.length === 0) return defaultValue;
+    const pts = [...points].sort((a, b) => a.t - b.t);
+    if (t <= pts[0].t) return pts[0].v;
+    if (t >= pts[pts.length - 1].t) return pts[pts.length - 1].v;
+
+    for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[i];
+        const p1 = pts[i + 1];
+        if (p0.t <= t && t <= p1.t) {
+            const denom = p1.t - p0.t;
+            if (Math.abs(denom) <= 1e-12) return p1.v;
+            const a = (t - p0.t) / denom;
+            return p0.v + a * (p1.v - p0.v);
+        }
+    }
+
+    return defaultValue;
+}
+
+function sectionTitleName(section) {
+    if (section === "selection") return "Selection";
+    return "Feature weights";
+}
+
+function canvasPoint(evt, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    return {x: (evt.clientX - rect.left) * (CANVAS_W / rect.width), y: (evt.clientY - rect.top) * (CANVAS_H / rect.height)};
+}
+
+function insidePlot(x, y) { return x >= PLOT_X0 && x <= PLOT_X1 && y >= PLOT_Y0 && y <= PLOT_Y1; }
+function xToTime(x) { return clamp((x - PLOT_X0) / (PLOT_X1 - PLOT_X0), 0, 1); }
+function timeToX(t) { return PLOT_X0 + t * (PLOT_X1 - PLOT_X0); }
+
+function yToValue(y, def) {
+    const norm = clamp(1 - ((y - PLOT_Y0) / (PLOT_Y1 - PLOT_Y0)), 0, 1);
+    let v = def.min + norm * (def.max - def.min);
+    if (def.step >= 1) v = Math.round(v);
+    else v = Math.round(v / def.step) * def.step;
+    return clamp(v, def.min, def.max);
+}
+
+function valueToY(v, def) {
+    const norm = (v - def.min) / (def.max - def.min);
+    return PLOT_Y0 + (1 - norm) * (PLOT_Y1 - PLOT_Y0);
+}
+
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function round3(x) { return Math.round(x * 1000) / 1000; }
+function sortedPoints(points) { return [...points].sort((a, b) => a.t - b.t); }
+
+function getDrawableCurves(def) {
+    const curve = getCurve(def);
+    if (def.section === "feature_weights" && curve.mode === "range") {
+        return [{name: "lower", points: curve.lower}, {name: "upper", points: curve.upper}];
+    }
+    return [{name: "points", points: curve.points}];
+}
+
+function findPointAt(def, x, y) {
+    const drawableCurves = getDrawableCurves(def);
+    for (const drawable of drawableCurves) {
+        for (const p of drawable.points) {
+            const px = timeToX(p.t);
+            const py = valueToY(p.v, def);
+            const d = Math.hypot(x - px, y - py);
+            if (d <= HIT_RADIUS) return {curveName: drawable.name, pointId: p.id};
+        }
+    }
+    return null;
+}
+
+function nearestCurveName(def, x, y) {
+    const drawableCurves = getDrawableCurves(def);
+    let bestName = drawableCurves[0].name;
+    let bestDistance = Infinity;
+    const t = xToTime(x);
+
+    for (const drawable of drawableCurves) {
+        const value = interpolatePoints(drawable.points, t, def.defaultValue);
+        const cy = valueToY(value, def);
+        const d = Math.abs(y - cy);
+        if (d < bestDistance) {
+            bestDistance = d;
+            bestName = drawable.name;
+        }
+    }
+
+    return bestName;
+}
+
+function getPointsByName(def, curveName) {
+    const curve = getCurve(def);
+    if (curveName === "lower") return curve.lower;
+    if (curveName === "upper") return curve.upper;
+    return curve.points;
+}
+
+function setPointsByName(def, curveName, points) {
+    const curve = getCurve(def);
+    if (curveName === "lower") curve.lower = points;
+    else if (curveName === "upper") curve.upper = points;
+    else curve.points = points;
+    setCurve(def, curve);
+}
+
+function isEndpoint(def, curveName, pointId) {
+    const points = getPointsByName(def, curveName);
+    const sorted = sortedPoints(points);
+    const index = sorted.findIndex(p => p.id === pointId);
+    return index === 0 || index === sorted.length - 1;
+}
+
+function drawTargetWaveform(ctx) {
+    if (!targetPeaks || targetPeaks.length === 0) return;
+    const midY = (PLOT_Y0 + PLOT_Y1) * 0.5;
+    const amp = (PLOT_Y1 - PLOT_Y0) * 0.44;
+
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.strokeStyle = COLORS.waveform;
+    ctx.lineWidth = 1;
+
+    for (let i = 0; i < targetPeaks.length; i++) {
+        const x = PLOT_X0 + i;
+        const minValue = targetPeaks[i][0];
+        const maxValue = targetPeaks[i][1];
+        const y1 = midY - maxValue * amp;
+        const y2 = midY - minValue * amp;
+        ctx.beginPath();
+        ctx.moveTo(x, y1);
+        ctx.lineTo(x, y2);
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+function drawTimeRuler(ctx) {
+    if (!targetDuration || targetDuration <= 0) return;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+    ctx.lineWidth = 1;
+    ctx.font = "10px monospace";
+
+    const nTicks = 8;
+    for (let i = 0; i <= nTicks; i++) {
+        const norm = i / nTicks;
+        const x = PLOT_X0 + norm * (PLOT_X1 - PLOT_X0);
+        const seconds = norm * targetDuration;
+        ctx.beginPath();
+        ctx.moveTo(x, PLOT_Y1 - 6);
+        ctx.lineTo(x, PLOT_Y1);
+        ctx.stroke();
+        const label = formatSeconds(seconds);
+        if (i === 0) ctx.fillText(label, x + 3, PLOT_Y1 - 8);
+        else if (i === nTicks) ctx.fillText(label, x - 38, PLOT_Y1 - 8);
+        else ctx.fillText(label, x - 14, PLOT_Y1 - 8);
+    }
+
+    if (targetFileName.length > 0) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+        ctx.fillText(targetFileName, PLOT_X0 + 4, PLOT_Y0 + 12);
+    }
+
+    ctx.restore();
+}
+
+function formatSeconds(seconds) {
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds - minutes * 60;
+    if (minutes > 0) return `${minutes}:${secs.toFixed(1).padStart(4, "0")}`;
+    return `${secs.toFixed(1)}s`;
+}
+
+function drawCurveLine(ctx, points, def, color, dashed=false, alpha=1.0) {
+    const sorted = sortedPoints(points);
+    if (sorted.length === 0) return;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = alpha;
+    if (dashed) ctx.setLineDash([6, 6]);
+
+    ctx.beginPath();
+    for (let i = 0; i < sorted.length; i++) {
+        const x = timeToX(sorted[i].t);
+        const y = valueToY(sorted[i].v, def);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawRangeFill(ctx, lower, upper, def) {
+    const times = uniqueSortedTimes(lower, upper);
+    if (times.length < 2) return;
+
+    ctx.save();
+    ctx.fillStyle = COLORS.feature_fill;
+    ctx.beginPath();
+
+    for (let i = 0; i < times.length; i++) {
+        const t = times[i];
+        const v = interpolatePoints(upper, t, def.defaultValue);
+        const x = timeToX(t);
+        const y = valueToY(v, def);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+
+    for (let i = times.length - 1; i >= 0; i--) {
+        const t = times[i];
+        const v = interpolatePoints(lower, t, def.defaultValue);
+        const x = timeToX(t);
+        const y = valueToY(v, def);
+        ctx.lineTo(x, y);
+    }
+
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+}
+
+function drawCurvePoints(ctx, points, def, color) {
+    const sorted = sortedPoints(points);
+    for (const p of sorted) {
+        const x = timeToX(p.t);
+        const y = valueToY(p.v, def);
+        ctx.fillStyle = color;
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, POINT_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    }
+}
+
+function drawReferenceLine(ctx, def) {
+    const y = valueToY(def.defaultValue, def);
+    ctx.save();
+    ctx.strokeStyle = COLORS.reference;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 5]);
+    ctx.beginPath();
+    ctx.moveTo(PLOT_X0, y);
+    ctx.lineTo(PLOT_X1, y);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawCanvas(canvas, def) {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = CANVAS_W * dpr;
+    canvas.height = CANVAS_H * dpr;
+    canvas.style.height = CANVAS_H + "px";
+
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const curve = getCurve(def);
+    const active = curve.active !== false;
+
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.fillStyle = COLORS.plot_bg;
+    ctx.strokeStyle = COLORS.plot_border;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(PLOT_X0, PLOT_Y0, PLOT_X1 - PLOT_X0, PLOT_Y1 - PLOT_Y0);
+    ctx.fill();
+    ctx.stroke();
+
+    drawTargetWaveform(ctx);
+
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+
+    for (let i = 0; i <= 10; i++) {
+        const x = PLOT_X0 + i * (PLOT_X1 - PLOT_X0) / 10;
+        ctx.beginPath();
+        ctx.moveTo(x, PLOT_Y0);
+        ctx.lineTo(x, PLOT_Y1);
+        ctx.stroke();
+    }
+
+    for (let i = 0; i <= 4; i++) {
+        const y = PLOT_Y0 + i * (PLOT_Y1 - PLOT_Y0) / 4;
+        ctx.beginPath();
+        ctx.moveTo(PLOT_X0, y);
+        ctx.lineTo(PLOT_X1, y);
+        ctx.stroke();
+    }
+
+    drawReferenceLine(ctx, def);
+
+    if (def.section === "feature_weights" && curve.mode === "range") {
+        drawRangeFill(ctx, curve.lower, curve.upper, def);
+        drawCurveLine(ctx, curve.lower, def, COLORS.feature_lower, !active, active ? 1.0 : 0.55);
+        drawCurveLine(ctx, curve.upper, def, COLORS.feature_upper, !active, active ? 1.0 : 0.55);
+        drawCurvePoints(ctx, curve.lower, def, COLORS.point);
+        drawCurvePoints(ctx, curve.upper, def, COLORS.point_upper);
+    } else {
+        const color = COLORS[def.section] || COLORS.feature_weights;
+        drawCurveLine(ctx, curve.points, def, color, !active, active ? 1.0 : 0.55);
+        drawCurvePoints(ctx, curve.points, def, COLORS.point);
+    }
+
+    drawTimeRuler(ctx);
+}
+
+function render() {
+    const container = document.getElementById("lanes");
+    container.innerHTML = "";
+    let previousSection = "";
+
+    for (const def of laneDefs) {
+        if (def.section !== previousSection) {
+            const sectionTitle = document.createElement("div");
+            sectionTitle.className = `section-title ${def.section}`;
+            sectionTitle.textContent = sectionTitleName(def.section);
+            container.appendChild(sectionTitle);
+            previousSection = def.section;
+        }
+
+        const curve = getCurve(def);
+        const lane = document.createElement("div");
+        lane.className = "lane";
+        if (curve.active === false) lane.classList.add("inactive");
+
+        const title = document.createElement("div");
+        title.className = `lane-title ${def.section}`;
+
+        const left = document.createElement("div");
+        left.className = "lane-title-left";
+
+        const strong = document.createElement("strong");
+        strong.textContent = def.label;
+        left.appendChild(strong);
+
+        const activeLabel = document.createElement("label");
+        activeLabel.className = "toggle";
+        const activeInput = document.createElement("input");
+        activeInput.type = "checkbox";
+        activeInput.checked = curve.active !== false;
+        activeInput.onchange = () => setCurveActive(def, activeInput.checked);
+        activeLabel.appendChild(activeInput);
+        activeLabel.appendChild(document.createTextNode("active"));
+        left.appendChild(activeLabel);
+
+        if (def.section === "feature_weights") {
+            const rangeLabel = document.createElement("label");
+            rangeLabel.className = "toggle";
+            const rangeInput = document.createElement("input");
+            rangeInput.type = "checkbox";
+            rangeInput.checked = curve.mode === "range";
+            rangeInput.onchange = () => setFeatureRangeMode(def, rangeInput.checked);
+            rangeLabel.appendChild(rangeInput);
+            rangeLabel.appendChild(document.createTextNode("range"));
+            left.appendChild(rangeLabel);
+        }
+
+        const resetButton = document.createElement("button");
+        resetButton.className = "small";
+        resetButton.textContent = "Reset";
+        resetButton.onclick = () => resetCurve(def);
+        left.appendChild(resetButton);
+
+        const right = document.createElement("span");
+        right.textContent = `${def.min} .. ${def.max} | neutral ${def.defaultValue}`;
+
+        title.appendChild(left);
+        title.appendChild(right);
+
+        const canvas = document.createElement("canvas");
+        canvas.dataset.section = def.section;
+        canvas.dataset.key = def.key;
+
+        canvas.addEventListener("mousedown", evt => {
+            const p = canvasPoint(evt, canvas);
+            const hit = findPointAt(def, p.x, p.y);
+
+            if (hit !== null) {
+                selectedPoint = {def: def, curveName: hit.curveName, pointId: hit.pointId};
+                return;
+            }
+
+            if (!insidePlot(p.x, p.y)) return;
+
+            const t = xToTime(p.x);
+            const v = yToValue(p.y, def);
+            const curveName = nearestCurveName(def, p.x, p.y);
+            const points = getPointsByName(def, curveName);
+            points.push(point(round3(t), v));
+            setPointsByName(def, curveName, points);
+            render();
+        });
+
+        canvas.addEventListener("dblclick", evt => {
+            const p = canvasPoint(evt, canvas);
+            const hit = findPointAt(def, p.x, p.y);
+            if (hit === null) return;
+            if (isEndpoint(def, hit.curveName, hit.pointId)) return;
+            const points = getPointsByName(def, hit.curveName);
+            if (points.length <= 2) return;
+            const filtered = points.filter(q => q.id !== hit.pointId);
+            setPointsByName(def, hit.curveName, filtered);
+            render();
+        });
+
+        lane.appendChild(title);
+        lane.appendChild(canvas);
+        container.appendChild(lane);
+        drawCanvas(canvas, def);
+    }
+}
+
+window.addEventListener("mousemove", evt => {
+    if (!selectedPoint) return;
+
+    const canvas = document.querySelector(`canvas[data-section="${selectedPoint.def.section}"][data-key="${selectedPoint.def.key}"]`);
+    if (!canvas) return;
+
+    const p = canvasPoint(evt, canvas);
+    let x = clamp(p.x, PLOT_X0, PLOT_X1);
+    let y = clamp(p.y, PLOT_Y0, PLOT_Y1);
+    let t = xToTime(x);
+    let v = yToValue(y, selectedPoint.def);
+
+    const points = getPointsByName(selectedPoint.def, selectedPoint.curveName);
+    const idx = points.findIndex(p => p.id === selectedPoint.pointId);
+    if (idx < 0) return;
+
+    const sorted = sortedPoints(points);
+    const sortedIndex = sorted.findIndex(p => p.id === selectedPoint.pointId);
+    if (sortedIndex === 0) t = 0.0;
+    if (sortedIndex === sorted.length - 1) t = 1.0;
+
+    points[idx].t = round3(t);
+    points[idx].v = v;
+    setPointsByName(selectedPoint.def, selectedPoint.curveName, points);
+    render();
+});
+
+window.addEventListener("mouseup", () => { selectedPoint = null; });
+window.addEventListener("resize", () => { render(); });
+
+function downloadJSON() {
+    const text = JSON.stringify(exportAutomation(), null, 2);
+    const blob = new Blob([text], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "automation.json";
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+buildDefaultAutomationFromFeatureText();
+</script>
+</body>
+</html>

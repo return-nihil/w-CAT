@@ -1,19 +1,17 @@
-# Audio data
 audio/*
 !audio/.gitkeep
 
 /src/feature_functions_OLD.jl
 
-# Generated chunks
 chunked_audio/
 
-# Generated corpus
 corpus_index.csv
 *.csv
 
-# OS/editor
 .DS_Store
 .vscode/
 
-# manifest (forse carichiamo poi?)
 Manifest.toml
+
+src/*
+scr_layer/*

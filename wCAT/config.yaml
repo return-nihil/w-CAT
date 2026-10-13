@@ -1,0 +1,40 @@
+# W-CAT CONFIG FILE
+
+# Here, you can select which features to use
+use_features: [loudness_db, spectral_centroid_hz, spectral_flatness, mfcc]
+
+# Optional layer-aware
+analysis_layers:
+  enabled: false
+  layers: [full, harmonic, percussive, residual]
+  features:
+    full: [loudness_db, spectral_centroid_hz, spectral_flatness, mfcc]
+    harmonic: [loudness_db, yin_pitch, harmonicity, chroma]
+    percussive: [loudness_db, spectral_flux, zero_crossing_rate]
+    residual: [loudness_db, spectral_flatness]
+  hpss: {n_fft: 2048, hop_size: 512, harmonic_kernel: 31, percussive_kernel: 31}
+
+audio:
+  audio_dir: audio # <-- put your files here!!!
+  output_csv: corpus_index.csv
+  normalize: true
+
+chunking:
+  modes: both # choices are: fixed | dynamic | both
+  fixed: {sizes: [2048], hops: [1024], keep_tail: false}
+  dynamic: {onset_sensitivities: [0.75], min_chunk_samples: 2048}
+  store_chunks: false
+
+analysis: {window: hann, n_fft: null}
+
+synthesis:
+  distance: {metric: weighted_euclidean}
+  normalization: {method: robust_range, q_low: 0.01, q_high: 0.99, clamp: true}
+  target: {frame_size: 2048, hop_size: 1024, mode: adaptive, energy_gate_db: -70.0, min_novelty: 0.08, steady_keep_probability: 0.20, force_every_samples: 4096}
+  matching: {temperature: 0.15, recent_memory: 12, recent_chunk_penalty: 0.20, recent_file_penalty: 0.05}
+  density: {mode: dust, placement: inside_event, default: 1.0, max: 4.0}
+  spray: {default_samples: 0, max_samples: 100, mode: symmetric}
+  grain_length: {default_ratio: 1.0, min_ratio: 0.1, max_ratio: 2.0}
+  window: {type: tukey, fade_samples: 128, fade_ratio: 0.25}
+  render_source: {mode: full} # choices are: full | harmonic | percussive | residual | matched_layer | layer_mix
+  rendering: {normalize_output: true, output_gain: 0.95}
